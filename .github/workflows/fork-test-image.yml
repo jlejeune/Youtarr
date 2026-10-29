@@ -1,0 +1,81 @@
+name: Fork Test Image
+
+# Fork only. This file lives on the test/* branch and must never be in a pull
+# request to DialmasterOrg/Youtarr. It builds one amd64 image from the branch
+# and pushes it to the GitHub Container Registry of the fork. The package stays
+# private unless the owner changes its visibility.
+
+on:
+  push:
+    branches: [ 'test/**' ]
+  workflow_dispatch:
+
+concurrency:
+  group: fork-test-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and push the test image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Get image tag
+        id: version
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "tag=test-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Pin npm
+        run: npm install -g npm@11.15.0 --ignore-scripts
+
+      - name: Install server dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install client dependencies
+        run: |
+          cd client
+          npm ci --ignore-scripts
+
+      - name: Build client
+        run: |
+          cd client
+          npm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Login to the GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The Dockerfile names the upstream repository in its source label. The
+      # label here points the package at this fork, so the fork token can push.
+      - name: Build and push the test image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/youtarr:${{ steps.version.outputs.tag }}
+
+      - name: Summary
+        run: |
+          echo "Image: ghcr.io/${{ github.repository_owner }}/youtarr:${{ steps.version.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
